@@ -87,10 +87,10 @@ struct NDILib {
         const char* lib_paths[] = {
             "lib/aarch64-rpi4-linux-gnueabi/libndi.so.6",   // Local v6
             "lib/aarch64-rpi4-linux-gnueabi/libndi.so",     // Local dir
-            "/usr/local/lib/libndi.dylib",                  // macOS Homebrew
-            "/opt/homebrew/lib/libndi.dylib",               // macOS M1/M2 Homebrew
             "/usr/local/lib/libndi.so.6",                   // Linux 
             "/usr/local/lib/libndi.so",                     // Linux fallback
+            "/usr/local/lib/libndi.dylib",                  // macOS Homebrew
+            "/opt/homebrew/lib/libndi.dylib",               // macOS M1/M2 Homebrew
             "/usr/lib/libndi.so.6",                         // Linux alt
             "/usr/lib/libndi.so",                           // Linux alt fallback
             "libndi.dylib",                                 // macOS system
@@ -426,12 +426,22 @@ public:
             pipeline = nullptr;
             pipeline_created = false;
         }
+        // A source can switch from HX (compressed) to raw mid-stream. Tear down
+        // the compressed pipeline too so it doesn't keep running (and leaking)
+        // in the background — only one of {pipeline, comp_pipeline} should exist.
+        if (comp_pipeline) {
+            gst_element_set_state(comp_pipeline, GST_STATE_NULL);
+            gst_element_get_state(comp_pipeline, NULL, NULL, GST_CLOCK_TIME_NONE);
+            gst_object_unref(comp_pipeline);
+            comp_pipeline = nullptr;
+            comp_pipeline_created = false;
+        }
         // Release audio_appsrc if it exists
         if (audio_appsrc) {
             gst_object_unref(audio_appsrc);
             audio_appsrc = nullptr;
         }
-        
+
         actual_frame_width = width;
         actual_frame_height = height;
         actual_frame_rate_n = framerate_n;
@@ -518,6 +528,17 @@ public:
             gst_object_unref(comp_pipeline);
             comp_pipeline = nullptr;
             comp_pipeline_created = false;
+        }
+
+        // A source can switch from raw to HX (compressed) mid-stream. Tear down
+        // the raw pipeline too so it doesn't keep running (and leaking) in the
+        // background — only one of {pipeline, comp_pipeline} should exist.
+        if (pipeline) {
+            gst_element_set_state(pipeline, GST_STATE_NULL);
+            gst_element_get_state(pipeline, NULL, NULL, GST_CLOCK_TIME_NONE);
+            gst_object_unref(pipeline);
+            pipeline = nullptr;
+            pipeline_created = false;
         }
 
         // Release shared audio_appsrc previously held by this compressed pipeline
@@ -621,13 +642,22 @@ public:
             gst_object_unref(pipeline);
             pipeline = nullptr;
         }
+        // The compressed (HX) pipeline was previously never torn down here,
+        // so it leaked (kept running in the background) on every stop/reconnect
+        // whenever the stream had used the HX path.
+        if (comp_pipeline) {
+            gst_element_set_state(comp_pipeline, GST_STATE_NULL);
+            gst_object_unref(comp_pipeline);
+            comp_pipeline = nullptr;
+        }
         // Release audio_appsrc if it exists
         if (audio_appsrc) {
             gst_object_unref(audio_appsrc);
             audio_appsrc = nullptr;
         }
         pipeline_created = false;
-        
+        comp_pipeline_created = false;
+
         std::cout << "- NDI Receiver stopped" << std::endl;
     }
     
@@ -641,7 +671,8 @@ private:
         NDIlib_audio_frame_v3_t audio_frame;
         GstElement* appsrc = nullptr;
         GstElement* comp_appsrc = nullptr;
-        
+        auto last_data_time = std::chrono::steady_clock::now();
+
         while (is_running) {
             NDIlib_frame_type_e frame_type = NDIlib_frame_type_none;
             
@@ -668,6 +699,8 @@ private:
             
             switch (frame_type) {
                 case NDIlib_frame_type_video: {
+                    last_data_time = std::chrono::steady_clock::now();
+
                     // HX sources deliver compressed frames via NDIlib_frame_type_video with a
                     // compressed FourCC (H264 / H265 / HEVC).  Detect this here and route to
                     // the compressed pipeline; otherwise treat as raw UYVY.
@@ -791,6 +824,8 @@ private:
                     break;
                 }
                 case NDIlib_frame_type_audio: {
+                    last_data_time = std::chrono::steady_clock::now();
+
                     if (audio_appsrc) {
                         // NDI audio is 32-bit float PLANAR (FourCC=FLTP) — must convert to
                         // 16-bit INTERLEAVED to match GStreamer caps (S16LE, layout=interleaved).
@@ -894,16 +929,19 @@ private:
                 //     break;
                 // }
                 case NDIlib_frame_type_none: {
-                     // No data, continue (throttled to once per second)
-                    static auto last_print_time = std::chrono::high_resolution_clock::now();
-                    auto current_time = std::chrono::high_resolution_clock::now();
-                    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(current_time - last_print_time);
-                    
-                    if (elapsed.count() >= 1) {
-                        std::cout << "NDI_Source_Not_Active^true" << std::endl;
-                        std::flush(std::cout);
-                        last_print_time = current_time;
-                        is_stalled = true;
+                    auto current_time = std::chrono::steady_clock::now();
+                    auto since_last_frame = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - last_data_time);
+
+                    if (since_last_frame.count() >= 1000) {
+                        static auto last_print_time = current_time;
+                        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(current_time - last_print_time);
+
+                        if (elapsed.count() >= 2) {
+                            std::cout << "NDI_Source_Not_Active^true" << std::endl;
+                            std::flush(std::cout);
+                            last_print_time = current_time;
+                            is_stalled = true;
+                        }
                     }
                     break;
                 }
@@ -945,7 +983,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::string version = "NDPi Receiver [GStreamer] (4.0.4)";
+    std::string version = "NDPi Receiver [GStreamer] (4.0.6)";
     std::string source_name = "";
     NDIlib_recv_bandwidth_e bandwidth = NDIlib_recv_bandwidth_max;
     NDIlib_recv_color_format_e color_format = NDIlib_recv_color_format_fastest;

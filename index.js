@@ -293,11 +293,11 @@ class NDPi {
         });
 
         this.server_api.on('shutdown-command', () => {
-            setTimeout(() => { shutdownDevice(); }, 1000);
+            setTimeout(() => { shutdownDevice(); }, 5000);
         });
 
         this.server_api.on('reboot-command', () => {
-            setTimeout(() => { rebootDevice(); }, 1000);
+            setTimeout(() => { rebootDevice(); }, 5000);
         });
     }
 
@@ -488,13 +488,13 @@ const index = new NDPi();
 
 async function shutdownDevice() {
     await quitNDPi('SIGTERM');
-    await new Promise((resolve) => { setTimeout(() => { resolve(); }, 1000); });
+    // await new Promise((resolve) => { setTimeout(() => { resolve(); }, 1000); });
     exec('sudo shutdown now');
 }
 
 async function rebootDevice() {
     await quitNDPi('SIGTERM');
-    await new Promise((resolve) => { setTimeout(() => { resolve(); }, 1000); });
+    // await new Promise((resolve) => { setTimeout(() => { resolve(); }, 1000); });
     exec('sudo reboot');
 }
 

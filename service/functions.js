@@ -86,56 +86,6 @@ const { exec, spawn } = require('node:child_process');
             });
             proc.once('exit', () => { resolve(); });
         });
-
-        // console.log(JSON.stringify(responseCecCompliance, null, 2));
-
-        /*
-        const lineIncludes = (search = '', match = '') => { return search.includes(match); }
-        
-        responseCecCompliance.forEach((line) => {
-            let fileName = null;
-            let writeValue = '';
-
-            const splitLine = String(line).split(':');
-
-            if (lineIncludes(line, 'Polling:') && !fileName)
-            {
-                fileName = 'output_display_cec_enabled';
-                writeValue = String(splitLine[1] || '').trim() == 'OK' ? 'true' : 'false';
-            }
-
-            if (lineIncludes(line, 'CEC Version') && !fileName && !String(splitLine[1] || '').includes('Tx'))
-            {
-                fileName = 'output_display_cec_version';
-                writeValue = String(splitLine[1] || '').trim();
-            }
-
-            if (lineIncludes(line, 'Physical Address') && !fileName && !String(splitLine[1] || '').includes('Tx'))
-            {
-                fileName = 'output_display_cec_address';
-                if (isNaN(Number(String(splitLine[1] || '').trim().replaceAll('.', ''))))
-                { writeValue = '' }
-                else
-                { writeValue = String(Number(String(splitLine[1] || '').trim().replaceAll('.', ''))) }
-            }
-
-            if (lineIncludes(line, 'Power Status') && !fileName)
-            {
-                fileName = 'output_display_cec_status_power';
-                writeValue = String(splitLine[1] || '').trim();
-            }
-
-
-            if (fileName)
-            {
-                // console.log('CEC Compliance Update:', JSON.stringify({
-                //     PATH: path.join(process.env.DATA_NDPI_PATH, fileName),
-                //     VALUE: writeValue
-                // }));
-                fs.writeFileSync(path.join(process.env.DATA_NDPI_PATH, fileName), writeValue, 'utf8');
-            }
-        });
-        */
     }
 
     /** 
@@ -150,7 +100,7 @@ const { exec, spawn } = require('node:child_process');
      * @param {string}  [message.type]
      * @param {any}     [message.data]
      * 
-     * @returns {CommandResponse}
+     * @returns {Promise<CommandResponse>}
      * 
      * ```json
      * {
@@ -188,7 +138,6 @@ const { exec, spawn } = require('node:child_process');
             case 'ping':
                 response.success = true;
                 return response;
-                break;
 
             // Visual Display
             case 'show-blank':
@@ -207,7 +156,6 @@ const { exec, spawn } = require('node:child_process');
                     response.success = false;
                 }
                 return response;
-                break;
 
             case 'show-overlay':
                 try
@@ -225,7 +173,6 @@ const { exec, spawn } = require('node:child_process');
                     response.success = false;
                 }
                 return response;
-                break;
 
             case 'set-overlay':
                 try { fs.writeFileSync(path.join(process.env.DATA_NDPI_PATH, 'media_overlay_image'), JSON.stringify(command.data, null, 2), 'utf8'); }
@@ -235,12 +182,10 @@ const { exec, spawn } = require('node:child_process');
                     response.success = false;
                 }
                 return response;
-                break;
             
             case 'set-source':
                 response = await setNdi(command, response);
                 return response;
-                break;
             
             case 'get-sources':
                 const ndiDiscoverPath = `./${fs.readFileSync(path.join(process.env.DATA_NDPI_PATH, 'ndi_source_discovery_exec'), 'utf8')}`;
@@ -275,7 +220,6 @@ const { exec, spawn } = require('node:child_process');
                     });
                 });
                 return response;
-                break;
 
             // Physical Display
             case 'send-cec':
@@ -295,7 +239,6 @@ const { exec, spawn } = require('node:child_process');
                     response.success = false;
                 }
                 return response;
-                break;
             
             // Device
             case 'shutdown-device':
@@ -315,7 +258,6 @@ const { exec, spawn } = require('node:child_process');
                     response.success = false;
                 }
                 return response;
-                break;
             
             case 'reboot-device':
                 try
@@ -334,7 +276,6 @@ const { exec, spawn } = require('node:child_process');
                     response.success = false;
                 }
                 return response;
-                break;
             
                 // NOT Complete
                 // This case is complete, but needs implemented.
@@ -344,20 +285,39 @@ const { exec, spawn } = require('node:child_process');
                 { fs.writeFileSync(path.join(process.env.DATA_NDPI_PATH, 'device_name'), commandData, 'utf8'); }
                 response.success = true;
                 return response;
-                break;
             
             case 'set-setting':
                 const setSetting = await updateSetting(command.data?.name || null, command.data?.value);
-                response.success = setSetting.success  //.success;
+                response.success = setSetting.success;
                 response.data.message = setSetting.message;
                 return response;
-                break;
+
+            case 'get-settings':
+                try
+                {
+                    const f = await fetch('http://localhost:3080/api/v1/__internal/get-settings', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(command)
+                    });
+                    if (f.ok)
+                    {
+                        response.success = true;
+                        response.data = await f.json();
+                    }
+                    else { response.success = false }
+                }
+                catch (error)
+                {
+                    response.data.message = error;
+                    response.success = false;
+                }
+                return response;
 
             case 'check-for-update':
                 await checkForUpdate();
                 response.success = true;
                 return response;
-                break;
 
             case 'install-update':
                 const installUpdate = updateInstall();
@@ -365,7 +325,6 @@ const { exec, spawn } = require('node:child_process');
                 response.data.message = installUpdate.message;
                 response.data.log = installUpdate.data;
                 return response;
-                break;
 
             // Default Fallback
             default:
@@ -932,7 +891,7 @@ const { exec, spawn } = require('node:child_process');
      * 
      * @param {string} name >**name**: Exact match to the fsSetting name.
      * @param {string} value >**value**: Value to write to the fsSetting. Must be of type string.
-     * @returns {FunctionResponse} 
+     * @returns {Promise<FunctionResponse>} 
      * 
      */
     async function updateSetting(name, value) {
@@ -1034,7 +993,7 @@ const { exec, spawn } = require('node:child_process');
      * 
      * #### NDPi Function
      * 
-     * @returns {FunctionResponse} 
+     * @returns {Promise<FunctionResponse>} 
      * 
      */
     async function updateInstall() {
