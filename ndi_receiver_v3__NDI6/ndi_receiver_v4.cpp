@@ -476,9 +476,18 @@ public:
         // - leaky=downstream: drop frames if backed up rather than buffering
         // - sync=false: don't wait for clock sync
         //"caps=video/x-raw,format=UYVY,width=%d,height=%d,framerate=%d/%d ! "
-        char pipeline_str[1024];
+        // With block=false, GstAppSrc ignores max-bytes for throttling (it only blocks
+        // the pushing thread when block=true) — so if the pipeline (videoconvert/scale/
+        // sink) can't keep up with the live NDI frame rate, appsrc's internal queue grows
+        // without bound and shows up as a steady memory leak. leaky-type=downstream makes
+        // appsrc drop its own oldest queued data instead of growing once max-bytes is hit.
+        unsigned long video_max_bytes = (unsigned long)width * (unsigned long)height * 2 * 4; // ~4 raw UYVY frames
+        const unsigned long audio_max_bytes = 1 * 1024 * 1024; // ~1MB of PCM audio
+
+        char pipeline_str[1536];
         snprintf(pipeline_str, sizeof(pipeline_str),
             "appsrc name=ndi_src format=time is-live=true block=false do-timestamp=true max-latency=0 "
+            "max-bytes=%lu leaky-type=downstream "
             "caps=video/x-raw,format=UYVY,width=%d,height=%d,framerate=%d/%d ! "
             "queue max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! "
             "videoconvert ! "
@@ -486,12 +495,15 @@ public:
             "video/x-raw,width=%d,height=%d ! "
             "autovideosink sync=false "
             "appsrc name=audio_src format=time is-live=true block=false do-timestamp=true "
+            "max-bytes=%lu leaky-type=downstream "
             "caps=audio/x-raw,format=S16LE,channels=2,rate=48000,layout=interleaved ! "
             "queue ! audioconvert ! audioresample ! autoaudiosink sync=false",
+            video_max_bytes,
             width, height, framerate_n, framerate_d,
             scale_method.c_str(),
-            display_width, display_height);
-            
+            display_width, display_height,
+            audio_max_bytes);
+
         GError *error = nullptr;
         pipeline = gst_parse_launch(pipeline_str, &error);
         
@@ -573,22 +585,32 @@ public:
         // appsrc delivers one complete H.264/H.265 access unit per buffer.
         // The audio element is named "audio_src" — matching the raw pipeline —
         // so the existing audio_appsrc member and audio-frame handler work unchanged.
-        char pipeline_str[1024];
+        // See createPipeline() for why max-bytes needs leaky-type=downstream alongside it:
+        // with block=false, appsrc otherwise queues without bound when decode/scale can't
+        // keep up with the live NDI frame rate, which presents as a steady memory leak.
+        const unsigned long comp_video_max_bytes = 16 * 1024 * 1024; // bound compressed appsrc queue
+        const unsigned long audio_max_bytes = 1 * 1024 * 1024; // ~1MB of PCM audio
+
+        char pipeline_str[1536];
         snprintf(pipeline_str, sizeof(pipeline_str),
-            "appsrc name=comp_src format=time is-live=true do-timestamp=true max-latency=0 "
+            "appsrc name=comp_src format=time is-live=true block=false do-timestamp=true max-latency=0 "
+            "max-bytes=%lu leaky-type=downstream "
             "caps=%s ! "
             "queue max-size-buffers=4 max-size-time=0 max-size-bytes=0 leaky=downstream ! "
             "%s ! %s ! videoconvert ! "
             "videoscale method=%s add-borders=false ! "
             "video/x-raw,width=%d,height=%d ! "
             "autovideosink sync=false "
-            "appsrc name=audio_src format=time is-live=true do-timestamp=true "
+            "appsrc name=audio_src format=time is-live=true block=false do-timestamp=true "
+            "max-bytes=%lu leaky-type=downstream "
             "caps=audio/x-raw,format=S16LE,channels=2,rate=48000,layout=interleaved ! "
             "queue ! audioconvert ! audioresample ! autoaudiosink sync=false",
+            comp_video_max_bytes,
             video_caps,
             parse_elem, decode_elem,
             scale_method.c_str(),
-            display_width, display_height);
+            display_width, display_height,
+            audio_max_bytes);
 
         GError *error = nullptr;
         comp_pipeline = gst_parse_launch(pipeline_str, &error);
@@ -727,6 +749,14 @@ private:
                                 gst_object_unref(comp_appsrc);
                                 comp_appsrc = nullptr;
                             }
+                            // createPipelineCompressed() also tears down the raw `pipeline`
+                            // (a source can switch from raw to HX mid-stream), so the local
+                            // `appsrc` ref to its now-destroyed appsrc must be dropped here too
+                            // — otherwise it dangles until this thread exits.
+                            if (appsrc) {
+                                gst_object_unref(appsrc);
+                                appsrc = nullptr;
+                            }
 
                             createPipelineCompressed(video_frame.xres, video_frame.yres,
                                                      video_frame.frame_rate_N, video_frame.frame_rate_D,
@@ -773,6 +803,14 @@ private:
                             if (appsrc) {
                                 gst_object_unref(appsrc);
                                 appsrc = nullptr;
+                            }
+                            // createPipeline() also tears down `comp_pipeline` (a source can
+                            // switch from HX to raw mid-stream), so the local `comp_appsrc`
+                            // ref to its now-destroyed appsrc must be dropped here too —
+                            // otherwise it dangles until this thread exits.
+                            if (comp_appsrc) {
+                                gst_object_unref(comp_appsrc);
+                                comp_appsrc = nullptr;
                             }
 
                             createPipeline(video_frame.xres, video_frame.yres,
