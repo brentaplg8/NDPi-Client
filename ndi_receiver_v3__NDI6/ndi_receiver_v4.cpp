@@ -9,8 +9,8 @@
  * - Audio conversion from NDI float to 16-bit PCM
  *
  * Compilation:
- *    g++ -o ndi_receiver_v4 ndi_receiver_v4.cpp $(pkg-config --cflags --libs gstreamer-1.0 gstreamer-app-1.0) -I"/opt/NDI SDK for Linux/include" -ldl -std=c++11
- *    g++ -o ndi_receiver_v4 ndi_receiver_v4.cpp $(pkg-config --cflags --libs gstreamer-1.0 gstreamer-app-1.0) -I"include" -ldl -std=c++11
+ *    g++ -o ndi_receiver_v4 ndi_receiver_v4.cpp $(pkg-config --cflags --libs gstreamer-1.0 gstreamer-app-1.0) -I"/opt/NDI SDK for Linux/include" -ldl -lX11 -std=c++11
+ *    g++ -o ndi_receiver_v4 ndi_receiver_v4.cpp $(pkg-config --cflags --libs gstreamer-1.0 gstreamer-app-1.0) -I"include" -ldl -lX11 -std=c++11
  *
  * Usage:
  *    ./ndi_receiver_v# "NDI Source Name"
@@ -31,6 +31,7 @@
 #include <gst/gst.h>
 #include <gst/app/gstappsrc.h>
 #include <Processing.NDI.Lib.h>
+#include <X11/Xlib.h>
 
 // NDIlib_frame_type_compressed_video is not part of the public NDI SDK v6 enum.
 // NDI HX sources deliver compressed frames with a compressed FourCC via the
@@ -166,6 +167,89 @@ struct NDILib
 
 // Global NDI library instance
 NDILib g_ndi;
+
+// Nothing was watching the pipeline bus, so an internal GStreamer error
+// (decoder negotiation failure, missing plugin, decode error, etc.) would
+// silently halt the pipeline while the app kept pushing buffers into appsrc
+// none the wiser — presenting as "shows the first frame, then freezes" with
+// no diagnostic output at all. This surfaces what's actually going wrong.
+static gboolean onBusMessage(GstBus *bus, GstMessage *msg, gpointer user_data)
+{
+    const char *label = static_cast<const char *>(user_data);
+    switch (GST_MESSAGE_TYPE(msg))
+    {
+    case GST_MESSAGE_ERROR:
+    {
+        GError *err = nullptr;
+        gchar *debug = nullptr;
+        gst_message_parse_error(msg, &err, &debug);
+        std::cerr << "[" << label << "] GStreamer ERROR from "
+                  << GST_OBJECT_NAME(msg->src) << ": " << err->message
+                  << " (" << (debug ? debug : "no debug info") << ")" << std::endl;
+        g_error_free(err);
+        g_free(debug);
+        break;
+    }
+    case GST_MESSAGE_WARNING:
+    {
+        GError *err = nullptr;
+        gchar *debug = nullptr;
+        gst_message_parse_warning(msg, &err, &debug);
+        std::cerr << "[" << label << "] GStreamer WARNING from "
+                  << GST_OBJECT_NAME(msg->src) << ": " << err->message
+                  << " (" << (debug ? debug : "no debug info") << ")" << std::endl;
+        g_error_free(err);
+        g_free(debug);
+        break;
+    }
+    case GST_MESSAGE_EOS:
+        std::cerr << "[" << label << "] GStreamer EOS" << std::endl;
+        break;
+    default:
+        break;
+    }
+    return TRUE;
+}
+
+// Diagnostic pad probe: proves whether buffers actually keep reaching the real
+// video sink's sink pad, as distinct from appsrc's push-buffer merely
+// succeeding (which only confirms the *first* downstream queue accepted it —
+// it says nothing about whether the rest of the chain keeps consuming).
+struct SinkProbeState
+{
+    std::string label;
+    uint64_t count;
+    SinkProbeState(const std::string &l) : label(l), count(0) {}
+};
+
+static GstPadProbeReturn onSinkBufferProbe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
+{
+    SinkProbeState *state = static_cast<SinkProbeState *>(user_data);
+    state->count++;
+    if (state->count <= 5 || state->count % 30 == 0)
+    {
+        std::cout << "- [" << state->label << "] Buffer reached video sink pad: " << state->count << std::endl;
+    }
+    return GST_PAD_PROBE_OK;
+}
+
+static void attachSinkProbe(GstElement *bin, const char *label)
+{
+    GstElement *vsink = gst_bin_get_by_name(GST_BIN(bin), "vsink");
+    if (!vsink)
+        return;
+
+    GstPad *sinkpad = gst_element_get_static_pad(vsink, "sink");
+    if (sinkpad)
+    {
+        SinkProbeState *state = new SinkProbeState(label);
+        gst_pad_add_probe(sinkpad, GST_PAD_PROBE_TYPE_BUFFER, onSinkBufferProbe, state,
+                          [](gpointer data)
+                          { delete static_cast<SinkProbeState *>(data); });
+        gst_object_unref(sinkpad);
+    }
+    gst_object_unref(vsink);
+}
 
 class NDIReceiver
 {
@@ -437,6 +521,7 @@ public:
 
     void createPipeline(int width, int height, int framerate_n, int framerate_d)
     {
+        std::cout << "- Creating standard GStreamer pipeline" << std::endl;
         // Check if pipeline needs to be recreated (resolution or framerate changed)
         if (pipeline_created &&
             width == actual_frame_width &&
@@ -526,11 +611,20 @@ public:
                  "videoconvert ! "
                  "videoscale method=%s add-borders=false ! "
                  "video/x-raw,width=%d,height=%d ! "
-                 "autovideosink sync=false "
+                 // autovideosink often prefers xvimagesink (Xv hardware overlay) on X11,
+                 // which is known to render the first frame fine and then hang forever on
+                 // later ones under certain X11 desktop/compositor configs, with no
+                 // GStreamer-level error — the underlying Xv port never signals completion.
+                 // ximagesink (plain XShm blit) doesn't have that failure mode.
+                 "ximagesink name=vsink sync=false "
                  "appsrc name=audio_src format=time is-live=true block=false do-timestamp=true "
                  "max-bytes=%lu leaky-type=downstream "
                  "caps=audio/x-raw,format=S16LE,channels=2,rate=48000,layout=interleaved ! "
-                 "queue ! audioconvert ! audioresample ! autoaudiosink sync=false",
+                 // TEMPORARY DIAGNOSTIC: swapped autoaudiosink -> fakesink to test whether
+                 // the audio device (ALSA/Pulse/PipeWire) hanging during its PLAYING
+                 // transition is what's stalling the whole shared pipeline's async state
+                 // change forever, silently blocking the video branch behind it too.
+                 "queue ! audioconvert ! audioresample ! fakesink sync=false",
                  video_max_bytes,
                  width, height, framerate_n, framerate_d,
                  scale_method.c_str(),
@@ -548,6 +642,13 @@ public:
         }
 
         pipeline_created = true;
+        attachSinkProbe(pipeline, "raw");
+
+        {
+            GstBus *bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline));
+            gst_bus_add_watch(bus, onBusMessage, (gpointer) "raw");
+            gst_object_unref(bus);
+        }
 
         audio_appsrc = gst_bin_get_by_name(GST_BIN(pipeline), "audio_src");
         gst_element_set_state(pipeline, GST_STATE_PLAYING);
@@ -557,6 +658,7 @@ public:
 
     void createPipelineCompressed(int width, int height, int framerate_n, int framerate_d, bool is_hevc)
     {
+        std::cout << "- Creating compressed GStreamer pipeline" << std::endl;
         // Check if compressed pipeline already matches current parameters
         if (comp_pipeline_created &&
             width == actual_comp_width &&
@@ -612,9 +714,14 @@ public:
         std::cout << "NDI_Source_Compression^" << (is_hevc ? "H.265/HEVC" : "H.264") << std::endl;
         std::flush(std::cout);
 
-        // Select GStreamer parse + decode elements based on codec
+        // Select GStreamer parse + decode elements based on codec.
+        // max-threads=1 disables libav's frame-parallel (multi-threaded) decoding,
+        // which otherwise buffers several frames ahead before emitting output —
+        // on a live low-latency HX feed this presents as "shows the first frame,
+        // then freezes", since the decoder never accumulates enough lookahead to
+        // resume once even a single access unit is skipped downstream.
         const char *parse_elem = is_hevc ? "h265parse" : "h264parse";
-        const char *decode_elem = is_hevc ? "avdec_h265" : "avdec_h264";
+        const char *decode_elem = is_hevc ? "avdec_h265 max-threads=1" : "avdec_h264 max-threads=1";
         const char *video_caps = is_hevc
                                      ? "video/x-h265,stream-format=byte-stream,alignment=au"
                                      : "video/x-h264,stream-format=byte-stream,alignment=au";
@@ -629,16 +736,24 @@ public:
         const unsigned long comp_video_max_bytes = 16 * 1024 * 1024; // bound compressed appsrc queue
         const unsigned long audio_max_bytes = 1 * 1024 * 1024;       // ~1MB of PCM audio
 
+        // Unlike raw UYVY frames (independent, safe to drop under backpressure),
+        // compressed H.264/H.265 access units are reference-dependent — dropping
+        // one corrupts decode until the next keyframe. So this queue must not leak;
+        // let it block/buffer instead (comp_video_max_bytes on appsrc upstream still
+        // bounds total memory growth if the source stalls). Bounded by TIME (50ms)
+        // rather than buffer count so it caps worst-case added latency directly —
+        // with max-threads=1 decode keeping up in real time this should sit ~empty;
+        // the bound only matters as a safety valve if decode ever falls behind.
         char pipeline_str[1536];
         snprintf(pipeline_str, sizeof(pipeline_str),
                  "appsrc name=comp_src format=time is-live=true block=false do-timestamp=true max-latency=0 "
                  "max-bytes=%lu leaky-type=downstream "
                  "caps=%s ! "
-                 "queue max-size-buffers=4 max-size-time=0 max-size-bytes=0 leaky=downstream ! "
+                 "queue max-size-buffers=0 max-size-time=50000000 max-size-bytes=0 leaky=no ! "
                  "%s ! %s ! videoconvert ! "
                  "videoscale method=%s add-borders=false ! "
                  "video/x-raw,width=%d,height=%d ! "
-                 "autovideosink sync=false "
+                 "ximagesink name=vsink sync=false "
                  "appsrc name=audio_src format=time is-live=true block=false do-timestamp=true "
                  "max-bytes=%lu leaky-type=downstream "
                  "caps=audio/x-raw,format=S16LE,channels=2,rate=48000,layout=interleaved ! "
@@ -661,6 +776,13 @@ public:
         }
 
         comp_pipeline_created = true;
+        attachSinkProbe(comp_pipeline, "hx");
+
+        {
+            GstBus *bus = gst_pipeline_get_bus(GST_PIPELINE(comp_pipeline));
+            gst_bus_add_watch(bus, onBusMessage, (gpointer) "hx");
+            gst_object_unref(bus);
+        }
 
         /**
          * Get audio element — reuse audio_appsrc member so the existing
@@ -792,6 +914,19 @@ private:
                 if (is_compressed)
                 {
                     // ----- Compressed (HX) path -----
+                    // Cheap diagnostic: proves whether NDI keeps delivering compressed
+                    // access units after the first one, independent of whether GStreamer
+                    // is actually consuming/rendering them. If this stops printing, the
+                    // stall is upstream (NDI/network); if it keeps printing steadily while
+                    // the picture is still frozen, the stall is in the GStreamer sink.
+                    static uint64_t comp_frames_seen = 0;
+                    comp_frames_seen++;
+                    if (comp_frames_seen <= 5 || comp_frames_seen % 30 == 0)
+                    {
+                        std::cout << "- HX video frames received from NDI: " << comp_frames_seen
+                                  << " (size=" << video_frame.data_size_in_bytes << " bytes)" << std::endl;
+                    }
+
                     bool needs_pipeline_update = !comp_pipeline_created ||
                                                  video_frame.xres != actual_comp_width ||
                                                  video_frame.yres != actual_comp_height ||
@@ -851,12 +986,46 @@ private:
 
                         GstFlowReturn ret;
                         g_signal_emit_by_name(comp_appsrc, "push-buffer", buffer, &ret);
+                        if (ret != GST_FLOW_OK)
+                        {
+                            std::cerr << "Compressed video push-buffer failed: " << gst_flow_get_name(ret) << std::endl;
+                        }
                         gst_buffer_unref(buffer);
                     }
                 }
                 else
                 {
                     // ----- Raw (UYVY) path -----
+                    // Mirrors the HX counter: proves whether NDI keeps delivering raw
+                    // frames after the first one, independent of whether the sink is
+                    // actually redrawing the display.
+                    static uint64_t raw_frames_seen = 0;
+                    raw_frames_seen++;
+                    if (raw_frames_seen <= 5 || raw_frames_seen % 30 == 0)
+                    {
+                        std::cout << "- Raw video frames received from NDI: " << raw_frames_seen
+                                  << " (FourCC=" << fcc << ", " << video_frame.xres << "x" << video_frame.yres
+                                  << ", stride=" << video_frame.line_stride_in_bytes
+                                  << ", expected=" << (video_frame.xres * 2)
+                                  << ", p_data=" << (void *)video_frame.p_data << ")" << std::endl;
+                    }
+
+                    // ONE-TIME diagnostic dump of a real captured frame's raw bytes, so we
+                    // can feed genuine NDI pixel content (not synthetic solid color) through
+                    // the known-good appsrc_repro_test harness and see if real content is
+                    // what triggers the freeze there too.
+                    if (raw_frames_seen == 3)
+                    {
+                        FILE *dump = fopen("/tmp/ndi_real_frame.raw", "wb");
+                        if (dump)
+                        {
+                            size_t dump_size = (size_t)video_frame.yres * video_frame.line_stride_in_bytes;
+                            fwrite(video_frame.p_data, 1, dump_size, dump);
+                            fclose(dump);
+                            std::cout << "- Dumped real frame (" << dump_size << " bytes) to /tmp/ndi_real_frame.raw" << std::endl;
+                        }
+                    }
+
                     bool needs_pipeline_update = !pipeline_created ||
                                                  video_frame.xres != actual_frame_width ||
                                                  video_frame.yres != actual_frame_height ||
@@ -1099,6 +1268,17 @@ void signalHandler(int sig)
 
 int main(int argc, char *argv[])
 {
+    // Xlib is not thread-safe by default. This app is inherently multi-threaded
+    // (the NDI receive thread pushes buffers, a separate thread runs the GLib
+    // main loop, and GStreamer's X11 video sink renders on its own internal
+    // streaming thread), and GStreamer's X11 sinks (ximagesink/xvimagesink,
+    // whatever autovideosink selects) make Xlib calls from that streaming
+    // thread. Without XInitThreads() called before any X11/GStreamer activity,
+    // concurrent Xlib calls across threads are undefined behavior — the classic
+    // symptom is the first frame rendering fine, then a later render call from
+    // a different thread deadlocking silently inside libX11 (no GStreamer bus
+    // error, since the thread never returns from the X11 call to report one).
+    XInitThreads();
 
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
@@ -1110,7 +1290,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    std::string version = "NDPi Receiver [GStreamer] (4.1.0)";
+    std::string version = "NDPi Receiver [GStreamer] (4.1.10)";
     std::string source_name = "";
     NDIlib_recv_bandwidth_e bandwidth = NDIlib_recv_bandwidth_max;
     NDIlib_recv_color_format_e color_format = NDIlib_recv_color_format_fastest;
