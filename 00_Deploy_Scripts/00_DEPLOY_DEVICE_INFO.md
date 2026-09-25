@@ -1,0 +1,8 @@
+**HOSTNAME** [2]
+NDPi-Client-0001.local
+**USERNAME** [4]
+ndpi-client
+**INSTALLATION TYPE** [6]
+PRODUCTION
+[PRODUCTION]
+[DEVELOPMENT]

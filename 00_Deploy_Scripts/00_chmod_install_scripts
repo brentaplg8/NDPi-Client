@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+
+# LOCAL_DIR="00_Deploy_Scripts/"
+LOCAL_DIR=""
+
+echo ""
+FILE_NAME="01_activate_x11"
+chmod +x "${LOCAL_DIR}${FILE_NAME}"
+echo "./${LOCAL_DIR}${FILE_NAME}"
+
+echo ""
+FILE_NAME="02_update_device"
+chmod +x "${LOCAL_DIR}${FILE_NAME}"
+echo "./${LOCAL_DIR}${FILE_NAME}"
+
+echo ""
+FILE_NAME="03_install_ndi_sdk"
+chmod +x "${LOCAL_DIR}${FILE_NAME}"
+echo "./${LOCAL_DIR}${FILE_NAME}"
+
+echo ""
+FILE_NAME="04_import_program_fs"
+chmod +x "${LOCAL_DIR}${FILE_NAME}"
+echo "./${LOCAL_DIR}${FILE_NAME}"
+
+echo ""
+FILE_NAME="05_compile_ndpi_program"
+chmod +x "${LOCAL_DIR}${FILE_NAME}"
+echo "./${LOCAL_DIR}${FILE_NAME}"
+
+echo ""
+FILE_NAME="06_sync_config"
+chmod +x "${LOCAL_DIR}${FILE_NAME}"
+echo "./${LOCAL_DIR}${FILE_NAME}"
+
+echo ""
+FILE_NAME="07_install_node_js"
+chmod +x "${LOCAL_DIR}${FILE_NAME}"
+echo "./${LOCAL_DIR}${FILE_NAME}"
+
+echo ""
+FILE_NAME="08_write_env_file"
+chmod +x "${LOCAL_DIR}${FILE_NAME}"
+echo "./${LOCAL_DIR}${FILE_NAME}"
+11_raspi_config
+echo ""
+FILE_NAME="09_write_service_file"
+chmod +x "${LOCAL_DIR}${FILE_NAME}"
+echo "./${LOCAL_DIR}${FILE_NAME}"
+
+echo ""
+FILE_NAME="10_configure_custom_bootsplash"
+chmod +x "${LOCAL_DIR}${FILE_NAME}"
+echo "./${LOCAL_DIR}${FILE_NAME}"
+
+echo ""
+FILE_NAME="11_raspi_config"
+chmod +x "${LOCAL_DIR}${FILE_NAME}"
+echo "./${LOCAL_DIR}${FILE_NAME}"
+
+echo ""
+FILE_NAME="12_configure_eeprom"
+chmod +x "${LOCAL_DIR}${FILE_NAME}"
+echo "./${LOCAL_DIR}${FILE_NAME}"
+
+echo ""
