@@ -17,10 +17,11 @@ class NDPiCommandServer_Client extends EventEmitter {
         super();
         this.controller_cec = null;
         this.settings = fsData;
+        this.isDev = String(process.env.NODE_ENV || 'PRODUCTION') === 'DEVELOPMENT';
         // 'development'
-        this.cacheControl = String(process.env.NODE_ENV || 'PRODUCTION') === 'PRODUCTION' ?
+        this.cacheControl = this.isDev ?
             'no-store, no-cache, must-revalidate, private' :
-            // 'public, max-age=86400, immutable' :
+            // 'public, max-age=86400, immutable';
             'no-store, no-cache, must-revalidate, private';
         
         try
@@ -98,23 +99,16 @@ class NDPiCommandServer_Client extends EventEmitter {
      *      Overlay Display - WebSocket Connection Handler
      */
     __ws_Display() {
-        this.ws_serv_display = new WebSocket.Server({ noServer: true });
         this.ws_conn_display = new Set();
-
+        this.ws_serv_display = new WebSocket.Server({ noServer: true });
         this.ws_serv_display.on('connection', (ws) =>{
-            // console.info(`[ ${path.basename(__filename).split('.')[0]} ]`, 'Overlay Display WebSocket connection ADDED.');
-
             this.ws_conn_display.add(ws);
-
             ws.send(JSON.stringify(Array.from(this.settings.fileMap)));
-
             ws.onerror = (error) => {
                 console.error(`⚠️   [ ${path.basename(__filename).split('.')[0]} ][ ERROR ]`, `Overlay Display WebSocket Server`, error);
             };
-
             ws.onclose = () => {
                 this.ws_conn_display.delete(ws);
-                // console.info(`[ ${path.basename(__filename).split('.')[0]} ]`, 'Overlay Display WebSocket connection REMOVED.');
             };
         });
     }
@@ -123,30 +117,22 @@ class NDPiCommandServer_Client extends EventEmitter {
      *      System GUI - WebSocket Connection Handler
      */
     __ws_System() {
-        this.ws_serv_system = new WebSocket.Server({ noServer: true });
         this.ws_conn_system = new Set();
-
+        this.ws_serv_system = new WebSocket.Server({ noServer: true });
         this.ws_serv_system.on('connection', (ws) =>{
-            // console.info(`[ ${path.basename(__filename).split('.')[0]} ]`, 'System GUI WebSocket connection ADDED.');
-
             this.ws_conn_system.add(ws);
-            
             ws.send(JSON.stringify(Array.from(this.settings.fileMap)));
-
             ws.onmessage = (event) => {
                 try
                 { func.processCommand(JSON.parse(event.data)); }
                 catch (error)
                 { console.error(`⚠️   [ ${path.basename(__filename).split('.')[0]} ][ ERROR ]`, error); }
             };
-
             ws.onerror = (error) => {
                 console.error(`⚠️   [ ${path.basename(__filename).split('.')[0]} ][ ERROR ]`, `System GUI WebSocket Server`, error);
             };
-
             ws.onclose = () => {
                 this.ws_conn_system.delete(ws);
-                // console.info(`[ ${path.basename(__filename).split('.')[0]} ]`, 'System GUI WebSocket connection REMOVED.');
             };
         });
     }
@@ -155,25 +141,17 @@ class NDPiCommandServer_Client extends EventEmitter {
      *      System Stats - WebSocket Connection Handler
      */
     __ws_Stats() {
-        this.ws_serv_stats = new WebSocket.Server({ noServer: true });
         this.ws_conn_stats = new Set();
-
+        this.ws_serv_stats = new WebSocket.Server({ noServer: true });
         this.ws_serv_stats.on('connection', (ws) =>{
-            // console.info(`[ ${path.basename(__filename).split('.')[0]} ]`, 'System Stats WebSocket connection ADDED.');
-
             this.ws_conn_stats.add(ws);
-
             ws.send(JSON.stringify(this.getSystemStats()));
-
             this.startStats();
-
             ws.onerror = (error) => {
                 console.error(`⚠️   [ ${path.basename(__filename).split('.')[0]} ][ ERROR ]`, `System Stats WebSocket Server`, error);
             };
-
             ws.onclose = () => {
                 this.ws_conn_stats.delete(ws);
-                // console.info(`[ ${path.basename(__filename).split('.')[0]} ]`, 'System Stats WebSocket connection REMOVED.');
             };
         });
     }
@@ -182,27 +160,19 @@ class NDPiCommandServer_Client extends EventEmitter {
      *      NDI Source - WebSocket Connection Handler
      */
     __ws_Sources() {
-        this.ws_serv_sources = new WebSocket.Server({ noServer: true });
         this.ws_conn_sources = new Set();
-
+        this.ws_serv_sources = new WebSocket.Server({ noServer: true });
         this.ws_serv_sources.on('connection', (ws) =>{
-            // console.info(`[ ${path.basename(__filename).split('.')[0]} ]`, 'NDI Source WebSocket connection ADDED.');
-
             this.ws_conn_sources.add(ws);
-
             if (this.availableSources)
             { ws.send(JSON.stringify(this.availableSources)); }
-
             if (!this.discoveryExec)
             { this.startDiscovery(); }
-
             ws.onerror = (error) => {
                 console.error(`⚠️   [ ${path.basename(__filename).split('.')[0]} ][ ERROR ]`, `NDI Source WebSocket Server`, error);
             };
-            
             ws.onclose = async () => {
                 this.ws_conn_sources.delete(ws);
-                // console.info(`[ ${path.basename(__filename).split('.')[0]} ]`, 'NDI Source WebSocket connection REMOVED.');
             };
         });
     }
@@ -217,23 +187,15 @@ class NDPiCommandServer_Client extends EventEmitter {
 
         this.Routes
         .route('/')
-            .get((req, res) => {
-                //   // DEV
-                // res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-                //   // PROD
-                // // res.set('Cache-Control', 'public, max-age=86400, immutable');
-                res.sendFile(path.join(__dirname, '..', 'public', 'system.html'));
-            });
+        .get((req, res) => {
+            res.sendFile(path.join(__dirname, '..', 'public', 'system.html'));
+        });
 
         this.Routes
         .route('/display/idle')
-            .get((req, res) => {
-                //   // DEV
-                // res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-                //   // PROD
-                // // res.set('Cache-Control', 'public, max-age=86400, immutable');
-                res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
-            });
+        .get((req, res) => {
+            res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+        });
 
         /**
          *  Public API (v1)
@@ -245,47 +207,33 @@ class NDPiCommandServer_Client extends EventEmitter {
          */
         this.Routes
         .route('/api/v1/rpc')
-            .get(async (req, res) => {
-                // to use: http://<ip>:<port>/api/v1/rpc?type=set-source&data=EVAN-MSI (OBS PGM)
-                // console.info(`[ ${path.basename(__filename).split('.')[0]} ]`, 'GET:', req.url);
-
-                const commandRes = await func.processCommand({
-                    ...req.query,
-                    id: crypto.randomUUID(),
-                });
-
-                if (commandRes && commandRes.success)
-                { res.status(200).json(commandRes); }
-                else
-                { res.status(400).json(commandRes); }
-            })
-            .post(async (req, res) => {
-                // console.info(`[ ${path.basename(__filename).split('.')[0]} ]`, 'POST:', req.url);
-
-                const commandRes = await func.processCommand({
-                    ...req.body,
-                    id: crypto.randomUUID(),
-                });
-
-                if (commandRes && commandRes.success)
-                { res.status(200).json(commandRes); }
-                else
-                { res.status(400).json(commandRes); }
+        .get(async (req, res) => {
+            const commandRes = await func.processCommand({
+                ...req.query,
+                id: crypto.randomUUID(),
             });
+
+            if (commandRes && commandRes.success)
+            { res.status(200).json(commandRes); }
+            else
+            { res.status(400).json(commandRes); }
+        })
+        .post(async (req, res) => {
+            if (this.isDev) { console.info(`[ ${path.basename(__filename).split('.')[0]} ]`, 'POST:', req.url); }
+
+            const commandRes = await func.processCommand({
+                ...req.body,
+                id: crypto.randomUUID(),
+            });
+
+            if (commandRes && commandRes.success)
+            { res.status(200).json(commandRes); }
+            else
+            { res.status(400).json(commandRes); }
+        });
 
         /**
          *  Adopt (v1)
-         *      Called by a Hub when it adopts this device (discovered via
-         *      mDNS) into its managed device list. Records which Hub
-         *      adopted this device ('ndpi_hub_hostname'/'ndpi_hub_port').
-         *      Historically this also pointed a persistent /ws/client
-         *      connection at that Hub (clientServer_websocket.js, removed —
-         *      the Hub now derives everything it used to get from that
-         *      connection by relaying this device's own /ws/system and
-         *      /ws/stats instead, which it already opens independently
-         *      once it knows this device's ip/commandPort from mDNS or
-         *      this same adopt call). These two settings are kept as
-         *      informational record-keeping only now.
          *      Required Input
          *      {
          *          hubHostname: <Hub's reachable hostname/IP>,
@@ -294,21 +242,21 @@ class NDPiCommandServer_Client extends EventEmitter {
          */
         this.Routes
         .route('/api/v1/adopt')
-            .post((req, res) => {
-                const { hubHostname, hubPort } = req.body || {};
+        .post((req, res) => {
+            const { hubHostname, hubPort } = req.body || {};
 
-                if (!hubHostname || !hubPort)
-                {
-                    res.status(400).json({ success: false, message: `Missing 'hubHostname' and/or 'hubPort'.` });
-                    return;
-                }
+            if (!hubHostname || !hubPort)
+            {
+                res.status(400).json({ success: false, message: `Missing 'hubHostname' and/or 'hubPort'.` });
+                return;
+            }
 
-                this.settings.put('ndpi_hub_hostname', String(hubHostname));
-                this.settings.put('ndpi_hub_port', String(hubPort));
+            this.settings.put('ndpi_hub_hostname', String(hubHostname));
+            this.settings.put('ndpi_hub_port', String(hubPort));
 
-                console.info(`[ ${path.basename(__filename).split('.')[0]} ]`, `Adopted by Hub at ${hubHostname}:${hubPort}`);
-                res.status(200).json({ success: true, message: `Hub connection configured: ${hubHostname}:${hubPort}` });
-            });
+            console.info(`[ ${path.basename(__filename).split('.')[0]} ]`, `Adopted by Hub at ${hubHostname}:${hubPort}`);
+            res.status(200).json({ success: true, message: `Hub connection configured: ${hubHostname}:${hubPort}` });
+        });
 
         /**
          *  Internal API (v1)
@@ -318,62 +266,59 @@ class NDPiCommandServer_Client extends EventEmitter {
          */
         this.Routes
         .route('/api/v1/__internal/:path')
-            .get((req, res) => {
-                res.sendStatus(403)
-            })
-            .post((req, res) => {
-                const { id, data } = req.body;
-                const switch_path  = req.params.path;
+        .get((req, res) => {
+            res.sendStatus(403)
+        })
+        .post((req, res) => {
+            const { id, data } = req.body;
+            const switch_path  = req.params.path;
 
-                if (req.hostname !== 'localhost')
-                {
-                    res.status(403);
-                    res.json({ success: false, message: 'forbidden' });
-                    return;
-                }
+            if (req.hostname !== 'localhost')
+            {
+                res.status(403);
+                res.json({ success: false, message: 'forbidden' });
+                return;
+            }
 
-                let reqValid = false;
-                switch (switch_path) {
+            let reqValid = false;
+            switch (switch_path) {
 
-                    /**
-                     *      Send CEC (Consumer Electronic Control) command 
-                     *      directly to the CEC controller.
-                     */
-                    case 'cec':
-                        reqValid = (typeof data === 'string' && this.controller_cec.isReady);
-                        if (reqValid && this.controller_cec)
-                        {
-                            this.controller_cec.send(decodeURI(data));
-                            res.status(200).json({ success: true });
-                        }
-                        else
-                        {
-                            res.status(400).json({ success: false });
-                        }
-                        break;
+                case 'cec':
+                    reqValid = (typeof data === 'string' && this.controller_cec.isReady);
+                    if (reqValid && this.controller_cec)
+                    {
+                        this.controller_cec.send(decodeURI(data));
+                        res.status(200).json({ success: true });
+                    }
+                    else
+                    { res.status(400).json({ success: false }); }
+                    break;
 
-                    case 'ndi':
-                        let source = String(data || 'none');
-                        this.settings.put('ndpi_status_ndi_source_target', source);
+                case 'ndi':
+                    let source = String(data || 'none');
+                    this.settings.put('ndpi_status_ndi_source_target', source);
 
-                        res.status(200).json({ success: true, message: `NDI Source Set: ${source}` });
-                        break;
+                    res.status(200).json({ success: true, message: `NDI Source Set: ${source}` });
+                    break;
 
-                    case 'shutdown':
-                        res.sendStatus(200);
-                        this.emit('shutdown-command');
-                        break;
+                case 'shutdown':
+                    res.status(200).json({ success: true });
+                    this.emit('shutdown-command');
+                    break;
 
-                    case 'reboot':
-                        res.sendStatus(200);
-                        this.emit('reboot-command');
-                        break;
+                case 'reboot':
+                    res.status(200).json({ success: true });
+                    this.emit('reboot-command');
+                    break;
 
-                    default:
-                        res.sendStatus(400);
-                        break;
-                }
-            });
+                case 'get-settings':
+                    res.status(200).json(this.settings.fsData.getAll() ?? []);
+
+                default:
+                    res.status(400).json({ success: false, message: `Path Does Not Exist` });
+                    break;
+            }
+        });
     }
 
     startServer() {

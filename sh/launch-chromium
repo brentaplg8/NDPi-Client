@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+DISPLAY=":0"
+
+if [ "$1" == "--wake" ]; then
+  xrandr --output HDMI-1 --off
+  xrandr --output HDMI-1 --auto
+fi
+
+chromium \
+  --app=https://syrupmaster-dev.powerappsportals.com \
+  --noerrdialogs \
+  --incognito \
+  --no-first-run \
+  --disable-gpu \
+  --disable-software-rasterizer \
+  --deny-permission-prompts \
+  --disk-cache-size=1 \
+  --media-cache-size=1 \
+  --enable-auto-reload \
+  --password-store=basic \
+  --disable-features=FullscreenAlertBubble \
+  --enable-features=DisplayEdgeToEdgeFullscreen,AsyncFullscreenWindowState \
+  --enable-viewport \
+  --start-fullscreen

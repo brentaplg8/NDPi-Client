@@ -34,7 +34,7 @@ function lookupEdidManufacturer(pnpId) {
 }
 
 class FileSystemMonitor extends EventEmitter {
-#pgmVersion;
+    #pgmVersion;
     #pgmVersionDate;
     #ipPoll;
     #updatePoll;
@@ -316,7 +316,7 @@ class FileSystemMonitor extends EventEmitter {
             },
             {
                 key: "ndpi_hub_hostname",
-                value: `NDPi-Hub`,
+                value: ``,
                 group: `Backend`,
                 allowEditInternal: true,
                 allowEditExternal: true,
@@ -740,6 +740,18 @@ class FileSystemMonitor extends EventEmitter {
         { this.emit('update', JSON.stringify(Array.from(this.fileMap))); }
 
         return;
+    }
+
+    /**
+     * 
+     * @param {boolean} stringify - Return the Array as a string.
+     * @returns {String|Array}
+     */
+    getAll(stringify = true) {
+        if (stringify)
+        { return JSON.stringify(Array.from(this.fileMap)); }
+        else
+        { return Array.from(this.fileMap); }
     }
 
     get(fileName) {

@@ -186,9 +186,7 @@ class NDI_Receiver_v4 extends EventEmitter {
                     this.settings.put('ndpi_status_ndi_source_active', '');
                 }),
                 new Promise((resolve) => {
-                    const startTimeout = setTimeout(() => { resolve(); }, 2000);
                     this.settings.once('ndpi_status_ndi_status', () => {
-                        clearTimeout(startTimeout);
                         resolve();
                     });
                     this.settings.put('ndpi_status_ndi_status', this.ndiStatus);

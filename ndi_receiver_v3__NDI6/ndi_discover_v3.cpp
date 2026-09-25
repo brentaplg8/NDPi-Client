@@ -44,11 +44,11 @@ struct NDILib {
         const char* lib_paths[] = {
             "lib/aarch64-rpi4-linux-gnueabi/libndi.so.6",   // Local v6
             "lib/aarch64-rpi4-linux-gnueabi/libndi.so",     // Local dir
+            "/usr/local/lib/libndi.so.6",                   // Linux v6 alt
+            "/usr/local/lib/libndi.so",                     // Linux alt fallback
             "/usr/local/lib/libndi.dylib",                  // macOS Homebrew
             "/opt/homebrew/lib/libndi.dylib",               // macOS M1/M2 Homebrew
-            "/usr/local/lib/libndi.so.6",                   // Linux v6 alt
             "/usr/lib/libndi.so",                           // Linux fallback
-            "/usr/local/lib/libndi.so",                     // Linux alt fallback
             "libndi.dylib",                                 // macOS system
             "libndi.so.6",                                  // Linux v6 system
             "libndi.so",                                    // Linux system fallback
@@ -110,7 +110,7 @@ void signal_handler(int signum) {
 }
 
 struct Options {
-    std::string version = "NDPi Discover (3.0.19)";
+    std::string version = "NDPi Discover (3.0.20)";
     std::string separator = "^";
     int timeout = 5;
 };
